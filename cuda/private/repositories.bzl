@@ -190,6 +190,119 @@ def config_clang(repository_ctx, cuda, clang_path):
     }
     repository_ctx.template("toolchain/clang/BUILD", tpl_label, substitutions = substitutions, executable = False)
 
+def _get_hipcc_version(repository_ctx, rocm_path):
+    result = repository_ctx.execute([rocm_path + "/bin/nvcc", "--version"])
+    if result.return_code != 0:
+        return [-1, -1]
+    for line in [line for line in result.stdout.split("\n") if "HIP version:" in line]:
+        version_str = line.split("HIP version: ")[1].split('.')
+        if len(version_str) >= 2:
+          return [int(version_str[0]), int(version_str[1])]
+    return [-1, -1]
+
+def detect_rocm_toolkit(repository_ctx):
+    """Detect ROCm Toolkit.
+
+    The path to ROCm Toolkit is determined as:
+      - the value of `toolkit_path` passed to local_rocm as an attribute
+      - taken from `ROCM_PATH` environment variable or
+      - defaults to '/opt/rocm'
+
+    Args:
+        repository_ctx: repository_ctx
+
+    Returns:
+        A struct contains the information of ROCm Toolkit.
+    """
+    rocm_path = repository_ctx.attr.toolkit_path
+    if rocm_path == "":
+        rocm_path = repository_ctx.os.environ.get("ROCM_PATH", None)
+    if rocm_path == None and _is_linux(repository_ctx):
+        rocm_path = "/opt/rocm"
+
+    if rocm_path != None and not repository_ctx.path(rocm_path).exists:
+        rocm_path = None
+
+    bin_ext = ".exe" if _is_windows(repository_ctx) else ""
+    nvlink = "@rules_cuda//cuda/dummy:nvlink"
+    link_stub = "@rules_cuda//cuda/dummy:link.stub"
+    bin2c = "@rules_cuda//cuda/dummy:bin2c"
+    fatbinary = "@rules_cuda//cuda/dummy:fatbinary"
+    if cuda_path != None:
+        if repository_ctx.path(cuda_path + "/bin/nvlink" + bin_ext).exists:
+            nvlink = str(Label("@local_cuda//:cuda/bin/nvlink{}".format(bin_ext)))
+        if repository_ctx.path(cuda_path + "/bin/crt/link.stub").exists:
+            link_stub = str(Label("@local_cuda//:cuda/bin/crt/link.stub"))
+        if repository_ctx.path(cuda_path + "/bin/bin2c" + bin_ext).exists:
+            bin2c = str(Label("@local_cuda//:cuda/bin/bin2c{}".format(bin_ext)))
+        if repository_ctx.path(cuda_path + "/bin/fatbinary" + bin_ext).exists:
+            fatbinary = str(Label("@local_cuda//:cuda/bin/fatbinary{}".format(bin_ext)))
+
+    nvcc_version_major = -1
+    nvcc_version_minor = -1
+
+    if cuda_path != None:
+        nvcc_version_major, nvcc_version_minor = _get_nvcc_version(repository_ctx, cuda_path)
+
+    return struct(
+        path = cuda_path,
+        # this should have been extracted from cuda.h, reuse nvcc for now
+        version_major = nvcc_version_major,
+        version_minor = nvcc_version_minor,
+        # this is extracted from `nvcc --version`
+        nvcc_version_major = nvcc_version_major,
+        nvcc_version_minor = nvcc_version_minor,
+        nvlink_label = nvlink,
+        link_stub_label = link_stub,
+        bin2c_label = bin2c,
+        fatbinary_label = fatbinary,
+    )
+
+def config_cuda_toolkit_and_nvcc(repository_ctx, cuda):
+    """Generate `@local_cuda//BUILD` and `@local_cuda//defs.bzl` and `@local_cuda//toolchain/BUILD`
+
+    Args:
+        repository_ctx: repository_ctx
+        cuda: The struct returned from detect_cuda_toolkit
+    """
+
+    # Generate @local_cuda//BUILD and @local_cuda//defs.bzl
+    defs_bzl_content = ""
+    defs_if_local_cuda = "def if_local_cuda(if_true, if_false = []):\n    return %s\n"
+    if cuda.path != None:
+        # When using a special cuda toolkit path install, need to manually fix up the lib64 links
+        if cuda.path == "/usr/lib/nvidia-cuda-toolkit":
+            repository_ctx.symlink(cuda.path + "/bin", "cuda/bin")
+            repository_ctx.symlink("/usr/lib/x86_64-linux-gnu", "cuda/lib64")
+        else:
+            repository_ctx.symlink(cuda.path, "cuda")
+        repository_ctx.symlink(Label("//cuda:runtime/BUILD.local_cuda"), "BUILD")
+        defs_bzl_content += defs_if_local_cuda % "if_true"
+    else:
+        repository_ctx.file("BUILD")  # Empty file
+        defs_bzl_content += defs_if_local_cuda % "if_false"
+    repository_ctx.file("defs.bzl", defs_bzl_content)
+
+    # Generate @local_cuda//toolchain/BUILD
+    tpl_label = Label(
+        "//cuda:templates/BUILD.local_toolchain_" +
+        ("nvcc" if _is_linux(repository_ctx) else "nvcc_msvc"),
+    )
+    substitutions = {
+        "%{cuda_path}": _to_forward_slash(cuda.path) if cuda.path else "cuda-not-found",
+        "%{cuda_version}": "{}.{}".format(cuda.version_major, cuda.version_minor),
+        "%{nvcc_version_major}": str(cuda.nvcc_version_major),
+        "%{nvcc_version_minor}": str(cuda.nvcc_version_minor),
+        "%{nvlink_label}": cuda.nvlink_label,
+        "%{link_stub_label}": cuda.link_stub_label,
+        "%{bin2c_label}": cuda.bin2c_label,
+        "%{fatbinary_label}": cuda.fatbinary_label,
+    }
+    env_tmp = repository_ctx.os.environ.get("TMP", repository_ctx.os.environ.get("TEMP", None))
+    if env_tmp != None:
+        substitutions["%{env_tmp}"] = _to_forward_slash(env_tmp)
+    repository_ctx.template("toolchain/BUILD", tpl_label, substitutions = substitutions, executable = False)
+
 def _local_cuda_impl(repository_ctx):
     cuda = detect_cuda_toolkit(repository_ctx)
     config_cuda_toolkit_and_nvcc(repository_ctx, cuda)

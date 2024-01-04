@@ -11,6 +11,7 @@ toolchain = use_extension("@rules_cuda//cuda:extensions.bzl", "toolchain")
 use_repo(toolchain, "local_cuda")
 
 register_toolchains(
+    "@local_cuda//toolchain:hipcc-local-toolchain",
     "@local_cuda//toolchain:nvcc-local-toolchain",
     "@local_cuda//toolchain/clang:clang-local-toolchain",
 )

@@ -52,6 +52,7 @@ string_flag(
     values = [
         "nvcc",
         "clang",
+        "hipcc",
     ],
 )
 
@@ -63,6 +64,11 @@ config_setting(
 config_setting(
     name = "compiler_is_clang",
     flag_values = {":compiler": "clang"},
+)
+
+config_setting(
+    name = "compiler_is_hipcc",
+    flag_values = {":compiler": "hipcc"},
 )
 
 # Command line flag for copts to add to cuda_library() compile command.

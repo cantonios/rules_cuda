@@ -1,0 +1,50 @@
+# This becomes the BUILD file for @local_cuda//toolchain/ under Linux.
+
+load(
+    "@rules_cuda//cuda:defs.bzl",
+    "cuda_toolchain",
+    "cuda_toolkit",
+    cuda_toolchain_config = "cuda_toolchain_config_hipcc",
+)
+
+cuda_toolkit(
+    name = "cuda-toolkit",
+    bin2c = "%{bin2c_label}",
+    fatbinary = "%{fatbinary_label}",
+    link_stub = "%{link_stub_label}",
+    nvlink = "%{nvlink_label}",
+    path = "%{cuda_path}",
+    version = "%{cuda_version}",
+)
+
+cuda_toolchain_config(
+    name = "hipcc-local-config",
+    cuda_toolkit = ":cuda-toolkit",
+    # int("%{foo}") instead of %{foo} to make the file valid syntactically.
+    hipcc_version_major = int("%{hipcc_version_major}"),
+    hipcc_version_minor = int("%{hipcc_version_minor}"),
+    toolchain_identifier = "hipcc",
+)
+
+cuda_toolchain(
+    name = "hipcc-local",
+    compiler_executable = "%{cuda_path}/bin/hipcc",
+    toolchain_config = ":hipcc-local-config",
+)
+
+toolchain(
+    name = "hipcc-local-toolchain",
+    exec_compatible_with = [
+        "@platforms//os:linux",
+    ],
+    target_compatible_with = [
+        "@platforms//os:linux",
+    ],
+    target_settings = [
+        "@rules_cuda//cuda:is_enabled",
+        "@rules_cuda//cuda:compiler_is_hipcc",
+    ],
+    toolchain = ":hipcc-local",
+    toolchain_type = "@rules_cuda//cuda:toolchain_type",
+    visibility = ["//visibility:public"],
+)
